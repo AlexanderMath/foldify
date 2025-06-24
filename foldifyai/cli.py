@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import pathlib
 import sys
-
+from pathlib import Path
+from tqdm import tqdm
+import os 
+import time 
+import json 
+from rdkit import Chem
+from rdkit.Chem import AllChem
+import urllib
+from foldifyai.utils import get_type
 import requests
-
-foldifyai_ENDPOINT = "https://gpu1.foldify.org/fold?seq="
 
 
 def _usage() -> None:
@@ -15,19 +21,7 @@ def _usage() -> None:
     print(f"Usage: {prog} <path_to_file.fasta>", file=sys.stderr)
 
 
-#from foldifyai import fold
-#fold('cofactors/')
-# write out .a3m file and .pdb file 
 
-# change to do chunks 12->42 in bfd and 12->42 in uniref? 60 chunks. so ~45% slower. 
-# perhaps do 0,2,4,8,...50 in both?
-
-import time 
-import json 
-from rdkit import Chem
-from rdkit.Chem import AllChem
-import urllib
-from foldifyai.utils import get_type
 def compute_3d_conformer(mol, version: str = "v3") -> bool:
     if version == "v3":
         options = AllChem.ETKDGv3()
@@ -39,8 +33,11 @@ def compute_3d_conformer(mol, version: str = "v3") -> bool:
     options.clearConfs = False
     conf_id = -1
 
+    options.timeout = 3 # don't spend more than three seconds on AllChem.EmbedMolecule
+    #options.maxIterations = 10 # don't spend more than 10 attempts (default is 100?)
+
     try:
-        conf_id = AllChem.EmbedMolecule(mol, options)
+        conf_id = AllChem.EmbedMolecule(mol, options)#, maxAttempts=0)
 
         if conf_id == -1:
             print(
@@ -56,15 +53,16 @@ def compute_3d_conformer(mol, version: str = "v3") -> bool:
         AllChem.UFFOptimizeMolecule(mol, confId=conf_id, maxIters=33)
 
     except RuntimeError:
+        return False 
         pass  # Force field issue here
     except ValueError:
+        return False 
         pass  # sanitization issue here
 
     if conf_id != -1:
         conformer = mol.GetConformer(conf_id)
         conformer.SetProp("name", "Computed")
         conformer.SetProp("coord_generation", f"ETKDG{version}")
-
         return True
 
     return False
@@ -84,11 +82,13 @@ def test(seq, affinity=False):
                     f"4 characters: {atom_name}."
                 )
                 raise ValueError(msg)
+                return False 
             atom.SetProp("name", atom_name)
 
         success = compute_3d_conformer(mol)
         if not success:
             msg = f"Failed to compute 3D conformer for {seq}"
+            return False 
             raise ValueError(msg)
 
         mol_no_h = AllChem.RemoveHs(mol, sanitize=False)
@@ -99,17 +99,15 @@ def test(seq, affinity=False):
         return False 
 
 def fold(folder):
-    from pathlib import Path
-    from tqdm import tqdm
-    import os 
-
     files = [a for a in Path(folder).rglob("*.fasta")]
     files = sorted(files, key=lambda p: os.path.getsize(str(p)))
     files = [str(a) for a in files]
 
-    for p in tqdm(files):
+    for c,p in enumerate(tqdm(files)):
+        skip = False 
         p = str(p)
         new_path = p.replace('.fasta','_raw.pdb')
+
         if os.path.exists(new_path): continue 
         content = open(p).read()
         if len(content) > 1000: continue 
@@ -121,12 +119,15 @@ def fold(folder):
                 if not test(line): 
                     print(f"Skipping {p}. RDKit didn't like {line}. ")
                     open(new_path, 'w').write(f"Skipping {p}. RDKit didn't like {line}. ")
-                    continue 
-
+                    skip = True 
+                else: print('ok')
+        if skip: continue 
         encoded = urllib.parse.quote(content, safe="")
         if len(content) == 0: 
             continue 
 
+        print('testing')
+        #exit()
         url = f"https://gpu1.foldify.org/fold?immediate_msa=True&seq={encoded}"
         
         # Open connection with progress reporting
@@ -164,7 +165,6 @@ def main() -> None:  # pragma: no cover
         raise SystemExit(1)
     fold(sys.argv[1])
 
-    
 
 if __name__ == "__main__":  # pragma: no cover
     sys.argv = ['foldifyai','cofactors/']
