@@ -1,6 +1,10 @@
 """Command-line interface entrypoint for the `foldifyai` package."""
 from __future__ import annotations
+import time 
 
+import base64
+import zipfile
+import io
 import pathlib
 import sys
 from pathlib import Path
@@ -13,13 +17,16 @@ from rdkit.Chem import AllChem
 import urllib
 from foldifyai.utils import get_type
 import requests
+try: 
+    from logmd import LogMD
+except:
+    pass 
 
 
 def _usage() -> None:
     """Print a short help message using the actual executable name."""
     prog = pathlib.Path(sys.argv[0]).name or "foldify"
     print(f"Usage: {prog} <path_to_file.fasta>", file=sys.stderr)
-
 
 
 def compute_3d_conformer(mol, version: str = "v3") -> bool:
@@ -98,72 +105,91 @@ def test(seq, affinity=False):
         print(e, seq)
         return False 
 
-def fold(folder):
+def fold(folder, log=False):
     files = [a for a in Path(folder).rglob("*.fasta")]
     files = sorted(files, key=lambda p: os.path.getsize(str(p)))
     files = [str(a) for a in files]
 
-    for c,p in enumerate(tqdm(files)):
-        skip = False 
-        p = str(p)
-        new_path = p.replace('.fasta','_raw.pdb')
+    if log: 
+        l = LogMD()
 
-        if os.path.exists(new_path): continue 
-        content = open(p).read()
-        if len(content) > 1000: continue 
+    output_dir = f"foldify_{folder}/"
 
-        for line in content.split('\n'):
-            if line.startswith('>'): continue 
-            if line == '': continue 
-            if get_type(line) == 'SMILES': 
-                if not test(line): 
-                    print(f"Skipping {p}. RDKit didn't like {line}. ")
-                    open(new_path, 'w').write(f"Skipping {p}. RDKit didn't like {line}. ")
-                    skip = True 
-                else: print('ok')
-        if skip: continue 
-        encoded = urllib.parse.quote(content, safe="")
-        if len(content) == 0: 
-            continue 
+    for c,p in enumerate(tqdm(files[::-1])):
 
-        print('testing')
-        #exit()
-        url = f"https://gpu1.foldify.org/fold?immediate_msa=True&seq={encoded}"
-        
-        # Open connection with progress reporting
-        response = urllib.request.urlopen(url)
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 1024
-        progress_bar = tqdm(total=total_size, unit='iB', unit_scale=True, desc=f"Streaming foldifyaing results {p}")
-        
-        result = ''
-        while True:
-            data = response.read(block_size)
-            if not data:
-                break
-            result += data.decode('utf-8')
-            progress_bar.update(len(data))
-        progress_bar.close()
-        
-        with open(new_path, 'w') as f: f.write(result)
+        try: 
+            t0 = time.time()
+            skip = False 
+            p = str(p)
 
-        jsons = [json.loads(a) for a in result.split('\n@\n') if a != '']
-        msa = [a for a in jsons if a['type'] == 'data_msa']
-        pdbs = [a for a in jsons if a['type'] == 'data_pdb']
+            # change this to point to output_dir
+            #new_path = p.replace('.fasta','_raw.pdb')
+            #if os.path.exists(new_path): continue 
 
-        for num, (msa_id, msa_data) in enumerate(msa[0]['data'].items()):
-            open(new_path.replace('_raw.pdb',f'_{num}.a3m'), 'w').write(msa_data)
+            content = open(p).read()
+            num_tokens = sum([len(line) for line in content.split('\n') if not line.startswith('>')])
+            print(num_tokens)
+            #if num_tokens > 1000: continue 
 
-        open(new_path.replace('_raw.pdb','.pdb'), 'w').write(pdbs[-1]['data'])
+            for line in content.split('\n'):
+                if line.startswith('>'): continue 
+                if line == '': continue 
+                if get_type(line) == 'SMILES': 
+                    if not test(line): 
+                        print(f"Skipping {p}. RDKit didn't like {line}. ")
+                        #open(new_path, 'w').write(f"Skipping {p}. RDKit didn't like {line}. ")
+                        skip = True 
+                    else: print('ok')
+            if skip: continue 
+            encoded = urllib.parse.quote(content, safe="")
+            if len(content) == 0: 
+                continue 
 
-        time.sleep(1)
+            #exit()
+            url = f"https://gpu1.foldify.org/fold?only_return_zip=True&seq={encoded}"
+            
+            # Open connection with progress reporting
+            response = urllib.request.urlopen(url)
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024
+            progress_bar = tqdm(total=total_size, unit='iB', unit_scale=True, desc=f"Streaming foldifyaing results {p}")
+            
+            result = ''
+            while True:
+                data = response.read(block_size)
+                if not data:
+                    break
+                result += data.decode('utf-8')
+                progress_bar.update(len(data))
+            progress_bar.close()
+            
+            #with open(new_path, 'w') as f: f.write(result)
+
+            jsons = [json.loads(a) for a in result.split('\n@\n') if a != '']
+            # last is a zip file, unzip. 
+            b64_zip_data = jsons[-1]['data']
+
+            zip_bytes = base64.b64decode(b64_zip_data)
+            zip_in_memory = io.BytesIO(zip_bytes)
+            with zipfile.ZipFile(zip_in_memory, 'r') as zip_ref:
+                path = f"{output_dir}"
+                os.makedirs(path, exist_ok=True)
+                zip_ref.extractall(path)
+
+            time.sleep(1)
+
+        except: 
+            pass 
 
 
 def main() -> None:  # pragma: no cover
-    if len(sys.argv) != 2:
+    if len(sys.argv) == 2:
+        fold(sys.argv[1])
+    elif len(sys.argv) == 3: 
+        fold(sys.argv[1], True)
+    else: 
         _usage()
         raise SystemExit(1)
-    fold(sys.argv[1])
 
 
 if __name__ == "__main__":  # pragma: no cover
