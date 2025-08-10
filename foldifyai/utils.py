@@ -25,3 +25,13 @@ def get_type(seq: str) -> str:
     if 'U' in letters_in_seq and 'T' not in letters_in_seq:
         return "RNA"
     return "DNA"
+
+
+
+def file_exists(s3_client, bucket, key):
+    """ Checks if a file exists in an S3-compatible bucket.  """
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return True
+    except:
+        return False
