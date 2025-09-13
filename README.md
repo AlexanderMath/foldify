@@ -4,5 +4,5 @@ pip install foldifyai
 ```
 
 ```
-foldifyai folder_containing_fasta_files/
+foldify -i folder_containing_fasta_files/ -h <your_server>
 ```
