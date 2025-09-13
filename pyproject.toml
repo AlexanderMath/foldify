@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "foldifyai"
-version = "0.1.15"
+version = "0.1.33"
 authors = [
 ]
 description = "Tiny CLI to send FASTA files to foldify.ai"
@@ -20,12 +20,13 @@ dependencies = [
     "requests>=2.31.0",
     "tqdm>=4.66.0",
     "rdkit>=2024.3.2",
-    "boto3",
-    "httpx"
+    "httpx",
+    "fsspec",
+    "s3fs"
 ]
 
 [project.urls]
-"Homepage" = "https://foldifyai.ai"
+"Homepage" = "https://foldify.ai"
 
 [project.scripts]
 foldifyai = "foldifyai.cli:main"
